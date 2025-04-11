@@ -1,17 +1,20 @@
 {
-  "builds": [
-    {
-      "src": "main.py",
-      "use": "@vercel/python",
-      "config": {
-        "buildCommand": "git submodule update --init --recursive && pip install -r requirements.txt"
+    "builds": [
+      {
+        "src": "main.py",
+        "use": "@vercel/python",
+        "config": {
+          "buildCommand": "git submodule update --init --recursive && pip install -r requirements.txt"
+        }
       }
+    ],
+    "routes": [
+      {
+        "src": "/(.*)",
+        "dest": "main.py"
+      }
+    ],
+    "git": {
+      "submodules": true
     }
-  ],
-  "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "main.py"
-    }
-  ]
-} 
+  }
