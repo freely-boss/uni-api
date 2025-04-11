@@ -146,16 +146,28 @@ def update_config(config_data, use_config_url=False):
 # 读取YAML配置文件
 async def load_config(app=None):
     import os
+    logger.info("开始加载配置...")
+    logger.info(f"当前工作目录: {os.getcwd()}")
+    logger.info(f"API_YAML_PATH: {API_YAML_PATH}")
+    logger.info(f"CONFIG_URL环境变量: {os.environ.get('CONFIG_URL')}")
+    
     try:
-        with open(API_YAML_PATH, 'r', encoding='utf-8') as file:
-            conf = yaml.load(file)
+        if os.path.exists(API_YAML_PATH):
+            logger.info(f"找到本地配置文件: {API_YAML_PATH}")
+            with open(API_YAML_PATH, 'r', encoding='utf-8') as file:
+                conf = yaml.load(file)
 
-        if conf:
-            config, api_keys_db, api_list = update_config(conf, use_config_url=False)
+            if conf:
+                logger.info("成功加载本地配置文件")
+                config, api_keys_db, api_list = update_config(conf, use_config_url=False)
+            else:
+                logger.error("配置文件 'api.yaml' 为空。请检查文件内容。")
+                config, api_keys_db, api_list = {}, {}, []
         else:
-            logger.error("配置文件 'api.yaml' 为空。请检查文件内容。")
+            logger.warning(f"本地配置文件不存在: {API_YAML_PATH}")
             config, api_keys_db, api_list = {}, {}, []
     except FileNotFoundError:
+        logger.warning(f"找不到配置文件: {API_YAML_PATH}")
         if not os.environ.get('CONFIG_URL'):
             logger.error("'api.yaml' not found. Please check the file path.")
         config, api_keys_db, api_list = {}, {}, []
@@ -169,11 +181,13 @@ async def load_config(app=None):
         config, api_keys_db, api_list = {}, {}, []
 
     if config != {}:
+        logger.info("使用本地配置，不需要加载远程配置")
         return config, api_keys_db, api_list
 
     # 新增： 从环境变量获取配置URL并拉取配置
     config_url = os.environ.get('CONFIG_URL')
     if config_url:
+        logger.info(f"尝试从URL加载配置: {config_url}")
         try:
             default_config = {
                 "headers": {
@@ -195,20 +209,31 @@ async def load_config(app=None):
                 timeout=timeout,
                 **default_config
             )
+            logger.info(f"开始发送请求到: {config_url}")
             response = await client.get(config_url)
+            logger.info(f"请求返回状态码: {response.status_code}")
             # logger.info(f"Fetching config from {response.text}")
             response.raise_for_status()
             config_data = yaml.load(response.text)
             # 更新配置
             # logger.info(config_data)
             if config_data:
+                logger.info("成功从URL加载配置")
                 config, api_keys_db, api_list = update_config(config_data, use_config_url=True)
             else:
-                logger.error(f"Error fetching or parsing config from {config_url}")
+                logger.error(f"从URL加载的配置为空: {config_url}")
                 config, api_keys_db, api_list = {}, {}, []
         except Exception as e:
-            logger.error(f"Error fetching or parsing config from {config_url}: {str(e)}")
+            logger.error(f"从URL加载配置失败: {config_url}, 错误: {str(e)}")
             config, api_keys_db, api_list = {}, {}, []
+    else:
+        logger.error("未设置CONFIG_URL环境变量，无法加载远程配置")
+        
+    if config == {}:
+        logger.critical("无法加载任何配置！应用将无法正常工作")
+    else:
+        logger.info(f"配置加载完成，providers数量: {len(config.get('providers', []))}, API密钥数量: {len(api_keys_db)}")
+        
     return config, api_keys_db, api_list
 
 def ensure_string(item):

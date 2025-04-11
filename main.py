@@ -141,11 +141,28 @@ async def lifespan(app: FastAPI):
     if not DISABLE_DATABASE:
         await create_tables()
 
+    logger.info("应用程序启动中...")
+    
     if app and not hasattr(app.state, 'config'):
+        logger.info("开始加载配置到app.state")
         # logger.warning("Config not found, attempting to reload")
-        app.state.config, app.state.api_keys_db, app.state.api_list = await load_config(app)
+        try:
+            app.state.config, app.state.api_keys_db, app.state.api_list = await load_config(app)
+            logger.info(f"配置加载结果: config={bool(app.state.config)}, api_keys_db={len(app.state.api_keys_db) if hasattr(app.state, 'api_keys_db') else 'None'}, api_list={len(app.state.api_list) if hasattr(app.state, 'api_list') else 'None'}")
+        except Exception as e:
+            logger.error(f"加载配置时发生错误: {str(e)}")
+            if not hasattr(app.state, 'config'):
+                logger.error("无法加载配置到app.state.config")
+                app.state.config = {}
+            if not hasattr(app.state, 'api_keys_db'):
+                logger.error("无法加载API密钥到app.state.api_keys_db")
+                app.state.api_keys_db = []
+            if not hasattr(app.state, 'api_list'):
+                logger.error("无法加载API列表到app.state.api_list")
+                app.state.api_list = []
 
-        if app.state.api_list:
+        if hasattr(app.state, 'api_list') and app.state.api_list:
+            logger.info(f"API列表长度: {len(app.state.api_list)}")
             app.state.user_api_keys_rate_limit = defaultdict(ThreadSafeCircularList)
             for api_index, api_key in enumerate(app.state.api_list):
                 app.state.user_api_keys_rate_limit[api_key] = ThreadSafeCircularList(
@@ -153,36 +170,56 @@ async def lifespan(app: FastAPI):
                     safe_get(app.state.config, 'api_keys', api_index, "preferences", "rate_limit", default={"default": "999999/min"}),
                     "round_robin"
                 )
+        else:
+            logger.error("API列表为空或不存在")
+            
         app.state.global_rate_limit = parse_rate_limit(safe_get(app.state.config, "preferences", "rate_limit", default="999999/min"))
 
-        for item in app.state.api_keys_db:
-            if item.get("role") == "admin":
-                app.state.admin_api_key = item.get("api")
-        if not hasattr(app.state, "admin_api_key"):
-            if len(app.state.api_keys_db) >= 1:
-                app.state.admin_api_key = app.state.api_keys_db[0].get("api")
-            else:
-                from utils import yaml_error_message
-                if yaml_error_message:
-                    raise HTTPException(
-                        status_code=500,
-                        detail={"error": yaml_error_message}
-                    )
+        if hasattr(app.state, 'api_keys_db'):
+            admin_key_found = False
+            for item in app.state.api_keys_db:
+                if item.get("role") == "admin":
+                    app.state.admin_api_key = item.get("api")
+                    admin_key_found = True
+                    logger.info("找到管理员API密钥")
+                    break
+                    
+            if not admin_key_found:
+                logger.warning("未找到管理员API密钥")
+                
+            if not hasattr(app.state, "admin_api_key"):
+                if len(app.state.api_keys_db) >= 1:
+                    app.state.admin_api_key = app.state.api_keys_db[0].get("api")
+                    logger.info("使用第一个API密钥作为管理员密钥")
                 else:
-                    raise HTTPException(
-                        status_code=500,
-                        detail={"error": "No API key found in api.yaml"}
-                    )
+                    logger.critical("无API密钥可用")
+                    from utils import yaml_error_message
+                    if yaml_error_message:
+                        raise HTTPException(
+                            status_code=500,
+                            detail={"error": yaml_error_message}
+                        )
+                    else:
+                        raise HTTPException(
+                            status_code=500,
+                            detail={"error": "No API key found in api.yaml"}
+                        )
+        else:
+            logger.critical("app.state.api_keys_db属性不存在")
 
-        app.state.provider_timeouts = init_preference(app.state.config, "model_timeout", DEFAULT_TIMEOUT)
-        app.state.keepalive_interval = init_preference(app.state.config, "keepalive_interval", 80)
+        try:
+            app.state.provider_timeouts = init_preference(app.state.config, "model_timeout", DEFAULT_TIMEOUT)
+            app.state.keepalive_interval = init_preference(app.state.config, "keepalive_interval", 80)
+            logger.info("初始化提供商超时配置")
+        except Exception as e:
+            logger.error(f"初始化提供商超时配置时出错: {str(e)}")
         # pprint(dict(app.state.provider_timeouts))
         # pprint(dict(app.state.keepalive_interval))
         # print("app.state.provider_timeouts", app.state.provider_timeouts)
         # print("app.state.keepalive_interval", app.state.keepalive_interval)
 
     if app and not hasattr(app.state, 'client_manager'):
-
+        logger.info("初始化客户端管理器")
         default_config = {
             "headers": {
                 "User-Agent": "curl/7.68.0",
@@ -199,6 +236,7 @@ async def lifespan(app: FastAPI):
 
 
     if app and not hasattr(app.state, "channel_manager"):
+        logger.info("初始化渠道管理器")
         if app.state.config and 'preferences' in app.state.config:
             COOLDOWN_PERIOD = app.state.config['preferences'].get('cooldown_period', 300)
         else:
@@ -207,12 +245,14 @@ async def lifespan(app: FastAPI):
         app.state.channel_manager = ChannelManager(cooldown_period=COOLDOWN_PERIOD)
 
     if app and not hasattr(app.state, "error_triggers"):
+        logger.info("设置错误触发器")
         if app.state.config and 'preferences' in app.state.config:
             ERROR_TRIGGERS = app.state.config['preferences'].get('error_triggers', [])
         else:
             ERROR_TRIGGERS = []
         app.state.error_triggers = ERROR_TRIGGERS
 
+    logger.info("应用程序初始化完成")
     yield
     # 关闭时的代码
     # await app.state.client.aclose()
