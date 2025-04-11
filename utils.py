@@ -1,6 +1,11 @@
+import os
+import re
 import json
+import yaml
 import httpx
-import asyncio
+import base64
+from typing import List, Dict, Any, Tuple, Optional, Union
+from yaml.error import YAMLError
 from time import time
 from log_config import logger
 from fastapi import HTTPException
@@ -145,7 +150,6 @@ def update_config(config_data, use_config_url=False):
 
 # 读取YAML配置文件
 async def load_config(app=None):
-    import os
     logger.info("开始加载配置...")
     logger.info(f"当前工作目录: {os.getcwd()}")
     logger.info(f"API_YAML_PATH: {API_YAML_PATH}")
@@ -186,7 +190,22 @@ async def load_config(app=None):
 
     # 新增： 从环境变量获取配置URL并拉取配置
     config_url = os.environ.get('CONFIG_URL')
-    if config_url:
+    api_keys_json = os.environ.get('API_KEYS_JSON')
+    
+    if api_keys_json:
+        try:
+            logger.info("从API_KEYS_JSON环境变量加载配置")
+            config_data = json.loads(api_keys_json)
+            if config_data:
+                logger.info("成功从API_KEYS_JSON加载配置")
+                config, api_keys_db, api_list = update_config(config_data, use_config_url=False)
+            else:
+                logger.error("API_KEYS_JSON环境变量内容为空")
+                config, api_keys_db, api_list = {}, {}, []
+        except Exception as e:
+            logger.error(f"从API_KEYS_JSON加载配置失败: {str(e)}")
+            config, api_keys_db, api_list = {}, {}, []
+    elif config_url:
         logger.info(f"尝试从URL加载配置: {config_url}")
         try:
             default_config = {
@@ -227,7 +246,7 @@ async def load_config(app=None):
             logger.error(f"从URL加载配置失败: {config_url}, 错误: {str(e)}")
             config, api_keys_db, api_list = {}, {}, []
     else:
-        logger.error("未设置CONFIG_URL环境变量，无法加载远程配置")
+        logger.error("未设置CONFIG_URL或API_KEYS_JSON环境变量，无法加载远程配置")
         
     if config == {}:
         logger.critical("无法加载任何配置！应用将无法正常工作")
